@@ -1,11 +1,12 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "harness-cli"
 version = "0.1.0"
 description = "Installer/compiler for the agent-based development harness"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.10"
 dependencies = ["PyYAML>=6.0"]
 
