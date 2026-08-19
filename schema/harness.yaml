@@ -1,0 +1,70 @@
+# harness.yaml — per-repo configuration. Commented reference; `harness init` generates
+# a minimal real one. Everything the compiled agents know about THIS repo comes from here.
+
+harness:
+  core_version: "0.1.0"        # written by `harness install`; compared by `doctor`
+
+provider:
+  kind: azure-devops           # azure-devops | github | gitlab
+  organization: "https://dev.azure.com/YOUR_ORG"
+  project: "YourProject"
+  repository: "your-repo"
+  # Gate states are tags on work items (ADO) or labels (GitHub/GitLab).
+  # Do not rename: agents and WIQL queries reference them literally.
+  gate_tags: [harness:proposed, harness:approved, harness:in-dev, harness:in-review, harness:done, harness:needs-revision]
+
+stacks:                        # which engineer agents get compiled for this repo
+  - javascript                 # javascript | csharp | python
+bdd_frameworks:
+  javascript: cucumber-js      # cucumber-js | vitest-gherkin
+  csharp: reqnroll
+  python: pytest-bdd
+
+commands:                      # used by lefthook, engineers and the pipeline contract
+  lint: "npm run lint"
+  format: "npm run format"
+  test_fast: "npm test"        # pre-push / CI-on-PR
+  build: "npm run build"
+
+security:
+  asvs_level: 1                # 1 default; 2 for sensitive repos
+  secret_scan: gitleaks
+
+architecture:
+  # Placement rule: global-scope decisions/diagrams live in the client's global
+  # knowledge repo; repo-scope ones live under docs/architecture/.
+  global_docs: "https://your-client.atlassian.net/wiki/spaces/ARCH"   # Confluence, ADO wiki…
+  adr_dir: docs/architecture/adrs
+  diagrams_dir: docs/architecture/diagrams
+  diagram_format: drawio-svg   # canonical; mermaid allowed repo-scope, Component level down
+  cloud: aws                   # aws | azure | gcp — selects draw.io icon library
+
+toggles:
+  system: "config-file"        # config-file | launchdarkly | azure-app-config | custom
+  registry: docs/toggles.md    # where toggle records live (type, owner, expiry)
+
+# Claude Code hooks — deterministic enforcement, compiled into .claude/settings.json.
+# Unlike rules (prose the agent follows), hooks are shell guards the agent cannot skip.
+hooks:
+  protect_compiled: true       # PreToolUse: blocks edits to .claude/harness|agents|commands,
+                               # CLAUDE.md, and raw .drawio files
+  session_context: true        # SessionStart: gate reminder + core-drift warning
+  stop_test_gate: false        # Stop: blocks finishing while commands.test_fast fails on a
+                               # dirty tree. OPT-IN — runs tests at the end of every response;
+                               # enable on repos where test_fast is genuinely fast (<30s)
+
+# QA ↔ SecDevOps contract. A suite present in the repo but absent here — or listed
+# without a real pipeline stage — fails `harness doctor` and blocks item closure.
+test-suites:
+  - name: integration
+    path: tests/integration
+    command: "npm run test:integration"
+    stage: ci-post-merge       # pipeline stage that runs it
+  - name: acceptance
+    path: tests/acceptance
+    command: "npx cypress run --env suite=acceptance"
+    stage: test-env
+  - name: smoke
+    path: tests/smoke
+    command: "npx cypress run --env suite=smoke"
+    stage: deploy
