@@ -21,7 +21,7 @@ from pathlib import Path
 
 import yaml
 
-__version__ = "0.3.0"          # kept in lockstep with core/VERSION
+__version__ = "0.4.0"          # kept in lockstep with core/VERSION
 
 MANIFEST = ".harness/manifest.json"
 CONFIG = "harness.yaml"
@@ -179,6 +179,7 @@ bdd_frameworks:
   javascript: cucumber-js
   csharp: reqnroll
   python: pytest-bdd
+  rust: cucumber-rs
 
 commands:
   lint: "echo TODO: lint"
@@ -679,7 +680,7 @@ def main() -> None:
     p.add_argument("--organization")
     p.add_argument("--project")
     p.add_argument("--repository")
-    p.add_argument("--stacks", help="comma-separated: javascript,csharp,python")
+    p.add_argument("--stacks", help="comma-separated: javascript,csharp,python,rust")
     p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_init)
 

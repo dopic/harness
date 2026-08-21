@@ -30,7 +30,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0            # secret scan needs history
-      - run: echo "install deps"    # replace per repo (setup-node / setup-dotnet / setup-python)
+      - run: echo "install deps"    # replace per repo (setup-node / setup-dotnet /
+                                    # setup-python / dtolnay/rust-toolchain)
       - name: lint
         run: echo "{{commands.lint}}"
       - name: fast tests

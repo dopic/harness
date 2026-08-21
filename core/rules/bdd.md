@@ -16,6 +16,6 @@ applies-to: [issue-writer, test-engineer, engineer, qa]
   card", not "When the user clicks #submit-btn". UI mechanics belong to QA's acceptance
   layer, not to the story.
 - **Framework per stack** comes from `harness.yaml` (`bdd_frameworks`): cucumber-js /
-  vitest-gherkin (JavaScript), Reqnroll (C#), pytest-bdd (Python).
+  vitest-gherkin (JavaScript), Reqnroll (C#), pytest-bdd (Python), cucumber-rs (Rust).
 - **When BDD doesn't fit** (no observable business behavior), say so explicitly on the
   item and fall back to TDD. Silence is not a decision.

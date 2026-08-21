@@ -114,8 +114,8 @@ checkout but the CLI is not:
 
 ```
 $ harness --version
-harness-cli 0.3.0
-core        0.3.0  (/Users/you/git/harness)
+harness-cli 0.4.0
+core        0.4.0  (/Users/you/git/harness)
 ```
 
 `harness doctor` warns on the same drift, and separately **fails** when a repo's

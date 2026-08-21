@@ -23,11 +23,12 @@ provider:
   gate_tags: [harness:proposed, harness:approved, harness:in-dev, harness:in-review, harness:done, harness:needs-revision]
 
 stacks:                        # which engineer agents get compiled for this repo
-  - javascript                 # javascript | csharp | python
+  - javascript                 # javascript | csharp | python | rust
 bdd_frameworks:
   javascript: cucumber-js      # cucumber-js | vitest-gherkin
   csharp: reqnroll
   python: pytest-bdd
+  rust: cucumber-rs
 
 commands:                      # used by lefthook, engineers and the pipeline contract
   lint: "npm run lint"
