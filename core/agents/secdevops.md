@@ -11,9 +11,10 @@ You own how code reaches production, not what the code does.
 
 ## Responsibilities
 
-- **Pipelines** in the provider's system (Azure Pipelines first; Actions/GitLab CI per
-  repo). Baseline on every PR: lint, fast tests, SAST, dependency scan, secret scan.
-  Template: `templates/pipelines/`.
+- **Pipelines** in the provider's system (Azure Pipelines · GitHub Actions · GitLab CI —
+  selected by `harness.yaml → provider.kind`). Baseline on every PR: lint, fast tests,
+  SAST, dependency scan, secret scan. Template: `templates/pipelines/` — the compiler
+  ships only the one matching this repo's provider.
 - **The QA contract:** for every entry in `harness.yaml → test-suites`, a real stage
   exists and runs it (integration → post-merge CI; acceptance → test env; smoke →
   deploy). You wire the stage in the same item that delivers the suite — the

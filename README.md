@@ -1,7 +1,7 @@
 # harness
 
 An agent-based development harness. Tool-agnostic core, compiled per target tool.
-Current compile target: **Claude Code**. Current validated provider: **Azure DevOps**.
+Current compile target: **Claude Code**. Validated providers: **Azure DevOps**, **GitHub**.
 
 ## Principles
 
@@ -42,10 +42,16 @@ echo 'export HARNESS_HOME="$HOME/git/harness"' >> ~/.zshrc   # how the CLI finds
 Then, from inside any project repo:
 
 ```bash
-harness init                        # writes harness.yaml (records core_path), docs skeleton
+harness init --provider github      # writes harness.yaml (records core_path), docs skeleton
+harness provider-setup              # GitHub/GitLab only: creates the harness:*, type:* and
+                                    # routing labels upstream (idempotent; --dry-run to preview)
 harness install --tool claude-code  # compiles core → CLAUDE.md, .claude/…, lefthook.yml
-harness doctor                      # config, provider auth, drift checks
+harness doctor                      # config, provider auth, labels, drift checks
 ```
+
+`init` defaults to `--provider azure-devops`; `provider-setup` is a no-op there (work
+item types and tags are native fields). On GitHub it is **not** optional — `gh issue
+create --label` fails on a label that does not exist yet, so nothing works before it.
 
 Core resolution order: `--core` flag → `$HARNESS_HOME` → `core_path` in `harness.yaml`
 → script location (checkout runs only). Without `HARNESS_HOME`, pass
@@ -89,7 +95,11 @@ compiled into `.claude/settings.json`, toggled in `harness.yaml → hooks`):
 ## Roadmap
 
 - Cursor compiler (`AGENTS.md` + `.cursor/rules`) and generic `agents-md` target.
-- GitHub and GitLab adapters validated end to end (recipes stubbed in `providers/`).
+- GitLab adapter validated end to end (recipes stubbed in `providers/gitlab.md`).
+- Optional reviewer identity on GitHub (a machine account token) so `gh pr review
+  --approve` can replace the `[harness:approved-by:*]` marker comments.
+- Two-way GitHub Projects v2 sync for `provider.project` (today items are only *added*
+  to the board; gate state is never mirrored into a board column).
 - Stale-item notifications (items sitting in `harness:proposed`).
 
 ## Versioning

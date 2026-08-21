@@ -186,8 +186,8 @@ harness/
 ├── providers/
 │   ├── interface.md       # verbos neutros
 │   ├── azure-devops.md    # receitas az boards + mapeamento Work Item Types  ← primeiro
-│   ├── github.md          # receitas gh                                      (fase 3)
-│   └── gitlab.md          # receitas glab                                    (fase 3)
+│   ├── github.md          # receitas gh                                      ← feito
+│   └── gitlab.md          # receitas glab                                    (pendente)
 ├── compilers/
 │   └── claude-code/       # gera CLAUDE.md, .claude/agents, skills, commands
 │                          # (cursor/ e agents-md/ entram via roadmap)
@@ -219,10 +219,20 @@ No repo de cada projeto, depois do `harness install`: `harness.yaml`, `.harness/
 |---|---|---|
 | 1 | `core/` completo em inglês: agentes, rules, templates, workflow + snapshot dos templates do Notion | Revisão sua do conteúdo dos 10 agentes e 8 rules |
 | 2 | Interface de provider + **adapter Azure DevOps** + compilador claude-code + instalador mínimo (`init`, `install`) | Ciclo `/issue` → gate → `/dev` → PR revisado rodando num projeto ADO seu |
-| 3 | Adapters GitHub e GitLab | Mesmo ciclo num repo GitHub |
+| 3 | Adapters GitHub e GitLab | Mesmo ciclo num repo GitHub — **GitHub entregue** (core v0.3.0); GitLab pendente |
 | 4 | `doctor`, `update`, lefthook empacotado, smoke do próprio harness | `harness doctor` verde nos três providers |
 
 Validar no ADO primeiro força a interface neutra a ser honesta desde o começo (é o provider mais rico); GitHub e GitLab viram casos simples depois.
+
+> **Nota de execução (fase 3, GitHub).** A previsão de que o GitHub seria "caso simples"
+> se confirmou nos verbos de item, mas a interface neutra precisou ceder em dois pontos
+> que o ADO não expõe: (1) `type:*` e gate são labels que **não existem até serem
+> criados** — daí o comando `harness provider-setup`, um passo que o ADO não tem; e
+> (2) o GitHub recusa review na PR aberta pela própria identidade (422), então
+> `approve`/`request_changes` deixaram de ser necessariamente chamadas de API e viraram
+> *vereditos* — no GitHub, comentários com marcador `[harness:approved-by:*]` lidos pelo
+> orquestrador. Ambos estão registrados em `providers/interface.md`. Hierarquia Epic→
+> Feature→PBI foi bridgeada com sub-issues nativas (REST, `gh issue edit` não tem flag).
 
 **Roadmap (fora das fases, sem data):**
 

@@ -1,0 +1,67 @@
+# Baseline GitHub Actions skeleton — secdevops adapts per repo (commands come from
+# harness.yaml → commands / test-suites). Jobs marked [suite:<name>] are the
+# materialization of the test-suites contract; `harness doctor` greps for these markers.
+#
+# Install as .github/workflows/harness.yml. Pushing this file requires a token with the
+# `workflow` scope (gh auth refresh -s workflow).
+
+name: harness
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write        # SAST upload
+
+concurrency:
+  group: harness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI (every PR)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0            # secret scan needs history
+      - run: echo "install deps"    # replace per repo (setup-node / setup-dotnet / setup-python)
+      - name: lint
+        run: echo "{{commands.lint}}"
+      - name: fast tests
+        run: echo "{{commands.test_fast}}"
+      - name: SAST + dependency scan + secret scan
+        run: echo "replace with the repo's scanners (CodeQL, dep review, {{security.secret_scan}})"
+
+  integration:                      # [suite:integration]
+    name: "Post-merge: integration"
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "{{test-suites.integration.command}}"
+
+  acceptance:                       # [suite:acceptance]
+    name: "Test env: acceptance (Cypress)"
+    needs: integration
+    runs-on: ubuntu-latest
+    environment: test               # environment gates/approvals live here
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "{{test-suites.acceptance.command}}"
+
+  deploy:                           # [suite:smoke]
+    name: "Deploy + smoke"
+    needs: acceptance
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "deploy"
+      - run: echo "{{test-suites.smoke.command}}"
