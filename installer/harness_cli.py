@@ -21,6 +21,8 @@ from pathlib import Path
 
 import yaml
 
+__version__ = "0.3.0"          # kept in lockstep with core/VERSION
+
 MANIFEST = ".harness/manifest.json"
 CONFIG = "harness.yaml"
 GATE_TAGS = [
@@ -93,7 +95,7 @@ def split_frontmatter(text: str) -> tuple[dict, str]:
     return (yaml.safe_load(m.group(1)) or {}), m.group(2)
 
 
-def find_core(explicit: str | None, cfg: dict | None) -> Path:
+def locate_core(explicit: str | None, cfg: dict | None) -> Path | None:
     """core/ location: --core > $HARNESS_HOME > harness.yaml > this file's repo."""
     candidates = []
     if explicit:
@@ -107,8 +109,15 @@ def find_core(explicit: str | None, cfg: dict | None) -> Path:
         root = c if (c / "core").is_dir() else (c.parent if (c.parent / "core").is_dir() else None)
         if root:
             return root
-    fail("cannot locate the harness repo (core/). Use --core or set HARNESS_HOME.")
-    raise AssertionError
+    return None
+
+
+def find_core(explicit: str | None, cfg: dict | None) -> Path:
+    root = locate_core(explicit, cfg)
+    if root is None:
+        fail("cannot locate the harness repo (core/). Use --core or set HARNESS_HOME.")
+    assert root is not None   # fail() exited; this only narrows the type
+    return root
 
 
 def load_config(repo: Path) -> dict:
@@ -120,6 +129,31 @@ def load_config(repo: Path) -> dict:
     except yaml.YAMLError as e:
         fail(f"{CONFIG} is not valid YAML: {e}")
     raise AssertionError
+
+
+class VersionAction(argparse.Action):
+    """argparse's built-in version action reflows the text; this keeps the layout."""
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest, nargs=0, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print(version_banner())
+        parser.exit()
+
+
+def version_banner() -> str:
+    try:
+        root = locate_core(None, None)
+        if root is None:
+            return (f"harness-cli {__version__}\n"
+                    "core        not found — set HARNESS_HOME or pass --core")
+        cv = core_version(root)
+        drift = "" if cv == __version__ else \
+            "  << drift: versions are locked; run `pipx reinstall harness-cli`"
+        return f"harness-cli {__version__}\ncore        {cv}  ({root}){drift}"
+    except OSError as e:
+        return f"harness-cli {__version__}\ncore        unreadable ({e})"
 
 
 def core_version(harness_root: Path) -> str:
@@ -522,6 +556,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                           f"installed {installed}, core {current}"
                           + ("" if installed == current else " → run `harness update`"))
 
+    if __version__ != current:
+        print(f"  [warn] harness-cli {__version__} but core is {current} — this repo "
+              "locks the two; run `pipx reinstall harness-cli`")
+
     gates = cfg.get("provider", {}).get("gate_tags", [])
     failures += not check(set(GATE_TAGS) <= set(gates), "gate tags intact",
                           "missing: " + ", ".join(sorted(set(GATE_TAGS) - set(gates)))
@@ -631,6 +669,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(prog="harness", description=__doc__)
     ap.add_argument("--repo", default=".", help="target project repo (default: cwd)")
     ap.add_argument("--core", help="path to the harness repo checkout")
+    ap.add_argument("-V", "--version", action=VersionAction,
+                    help="print the CLI and core versions")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("init", help="write harness.yaml + docs skeleton into a repo")

@@ -104,8 +104,23 @@ compiled into `.claude/settings.json`, toggled in `harness.yaml → hooks`):
 
 ## Versioning
 
-`core/VERSION` is bumped on any core change. `harness doctor` reports repos whose
-compiled artifacts are behind the installed core. No silent auto-update.
+One version for the whole repo: `core/VERSION` and the `harness-cli` package
+(`harness_cli.__version__`, which `pyproject.toml` reads dynamically) are **bumped
+together**. Bump both on any change to `core/` or to the installer.
+
+`harness --version` prints both and flags a mismatch — the case that actually bites is
+an installer change you did not `pipx reinstall`, since `core/` is read live from the
+checkout but the CLI is not:
+
+```
+$ harness --version
+harness-cli 0.3.0
+core        0.3.0  (/Users/you/git/harness)
+```
+
+`harness doctor` warns on the same drift, and separately **fails** when a repo's
+compiled artifacts are behind the core (that one is fixed with `harness update`, not a
+reinstall). No silent auto-update, either way.
 
 ## License
 

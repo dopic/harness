@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "harness-cli"
-version = "0.1.0"
+# Read from harness_cli.__version__, which is held in lockstep with core/VERSION.
+dynamic = ["version"]
 description = "Installer/compiler for the agent-based development harness"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.10"
@@ -15,3 +16,6 @@ harness = "harness_cli:main"
 
 [tool.setuptools]
 py-modules = ["harness_cli"]
+
+[tool.setuptools.dynamic]
+version = {attr = "harness_cli.__version__"}
