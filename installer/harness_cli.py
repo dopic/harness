@@ -21,7 +21,7 @@ from pathlib import Path
 
 import yaml
 
-__version__ = "0.5.0"          # kept in lockstep with core/VERSION
+__version__ = "0.7.0"          # kept in lockstep with core/VERSION
 
 MANIFEST = ".harness/manifest.json"
 CONFIG = "harness.yaml"
@@ -251,16 +251,19 @@ DETECTORS = {"javascript": detect_javascript, "csharp": detect_csharp,
              "python": detect_python, "rust": detect_rust}
 
 
+def stack_command_set(repo: Path, stack: str, detect: bool = True) -> dict[str, str]:
+    """What one stack contributes: its defaults, overridden by whatever the repo says."""
+    cmds = dict(STACK_COMMANDS.get(stack, {}))
+    if detect and stack in DETECTORS:
+        cmds.update({k: v for k, v in DETECTORS[stack](repo).items() if v})
+    return cmds
+
+
 def resolve_commands(repo: Path, stacks: list[str], detect: bool = True) -> dict[str, str]:
     """One command per key for the whole repo. A multi-stack repo chains its stacks in
     declaration order with `&&` — the first stack that fails stops the chain, which is
     what lefthook and the pipeline contract expect from a single command string."""
-    per_stack = []
-    for stack in stacks:
-        cmds = dict(STACK_COMMANDS.get(stack, {}))
-        if detect and stack in DETECTORS:
-            cmds.update({k: v for k, v in DETECTORS[stack](repo).items() if v})
-        per_stack.append(cmds)
+    per_stack = [stack_command_set(repo, stack, detect) for stack in stacks]
     out = {}
     for key in COMMAND_KEYS:
         parts: list[str] = []
@@ -548,7 +551,9 @@ Provider recipes for all upstream operations: `.claude/harness/provider.md`.
 """
 
 
-LEFTHOOK_TEMPLATE = """# Managed by harness (created once; evolve via secdevops agent)
+LEFTHOOK_TEMPLATE = """# Created by harness, then yours to evolve (secdevops owns it).
+# The `run:` values that come from harness.yaml -> commands are re-propagated by
+# `harness update` whenever they change there; everything else here is left alone.
 pre-commit:
   parallel: true
   commands:
@@ -566,6 +571,192 @@ pre-push:
 """
 
 
+# ---------------------------------------------------------------- stack changes
+
+# Only these paths are compile output that `update` may delete when it stops being
+# generated. lefthook.yml is deliberately NOT here: harness creates it once and the repo
+# owns it from then on.
+COMPILED_ROOTS = (".claude/", "CLAUDE.md")
+
+
+def prune_orphans(repo: Path, before: dict, after: list[Path]) -> list[str]:
+    """Drop compiled artifacts the current config no longer produces. Without this, a
+    stack removed from harness.yaml leaves its `engineer-<stack>.md` on disk and Claude
+    Code keeps routing to an agent for a stack the repo does not have."""
+    keep = {str(p.relative_to(repo)) for p in after}
+    gone = [rel for rel in before
+            if rel not in keep and rel.startswith(COMPILED_ROOTS)]
+    for rel in gone:
+        f = repo / rel
+        if f.is_file():
+            f.unlink()
+    return sorted(gone)
+
+
+def drop_segment(chain: str, seg: str) -> tuple[str, bool]:
+    """Remove one stack's link from a `a && b` chain, taking its separator with it."""
+    for pat in (r"\s*&&\s*" + re.escape(seg) + r"(?![\w:./-])",   # not the first link
+                r"^" + re.escape(seg) + r"\s*&&\s*",              # first of several
+                r"^" + re.escape(seg) + r"\s*$"):                 # the only link
+        out, n = re.subn(pat, "", chain, count=1)
+        if n:
+            return out.strip(), True
+    return chain, False
+
+
+def add_segment(chain: str, seg: str) -> str:
+    if not chain.strip() or "TODO" in chain:
+        return seg                                  # nothing real there to preserve
+    return chain if seg in chain else f"{chain} && {seg}"
+
+
+def set_command(text: str, key: str, value: str) -> str:
+    """Rewrite one key inside the `commands:` block of harness.yaml, at text level so the
+    user's comments and ordering survive. Scoped to the block: `format` must not match a
+    key of the same name elsewhere."""
+    m = re.search(r"^commands:.*?(?=^\S|\Z)", text, re.M | re.S)
+    if not m:
+        return text
+    block = m.group(0)
+    patched, n = re.subn(rf"^(\s*{re.escape(key)}:\s*).*?(\s*#.*)?$",
+                         lambda mm: mm.group(1) + json.dumps(value) + (mm.group(2) or ""),
+                         block, count=1, flags=re.M)
+    return text[:m.start()] + patched + text[m.end():] if n else text
+
+
+def sync_stacks(repo: Path, cfg: dict, previous: dict | None) -> tuple[list[str], dict]:
+    """Reconcile `commands` with a hand-edited `stacks:` list. A stack added there gets
+    its link appended to each chain; a stack removed has its link taken out — matching on
+    the link the last install recorded, so the OTHER stacks' hand-tuned commands survive.
+    Returns the report and the per-stack record for the manifest."""
+    stacks = [str(s) for s in (cfg.get("stacks") or ["javascript"])]
+    current = {s: stack_command_set(repo, s) for s in stacks}
+    if previous is None:            # installed before this was recorded — arm it silently
+        return [], current
+
+    added = [s for s in stacks if s not in previous]
+    removed = [s for s in previous if s not in stacks]
+    if not added and not removed:
+        return [], current
+
+    cfg_text = (repo / CONFIG).read_text()
+    cmds = dict(cfg.get("commands") or {})
+    report, missed = [], []
+    for key in COMMAND_KEYS:
+        chain = str(cmds.get(key, ""))
+        before = chain
+        for s in removed:
+            seg = previous[s].get(key)
+            if not seg:
+                continue
+            chain, hit = drop_segment(chain, seg)
+            if not hit:
+                missed.append(f"    [warn] {s}/{key}: {seg!r} not found in the chain — "
+                              "rewritten by hand? left as is")
+        for s in added:
+            seg = current[s].get(key)
+            if seg:
+                chain = add_segment(chain, seg)
+        if not chain.strip():
+            chain = f"echo TODO: {key}"
+        if chain != before:
+            cfg_text = set_command(cfg_text, key, chain)
+            report.append(f"  {key}: {before!r} → {chain!r}")
+
+    if report:
+        (repo / CONFIG).write_text(cfg_text)
+    head = ", ".join([f"+{s}" for s in added] + [f"-{s}" for s in removed])
+    return ([f"  stacks: {head}"] + report + missed) if (report or missed) else [], current
+
+
+# ---------------------------------------------------------------- propagation
+
+# harness.yaml is the source of truth for commands, but the places that actually RUN
+# them hold copies: lefthook.yml and the pipeline files (the stop-test-gate hook reads
+# harness.yaml live, so it needs nothing). `update` rewrites those copies when the value
+# in harness.yaml changed, matching on the value the last install recorded in the
+# manifest — so a hand-tuned pipeline keeps everything else it says.
+PROPAGATION_TARGETS = ["lefthook.yml", "azure-pipelines.yml", ".gitlab-ci.yml"]
+
+
+def propagation_files(repo: Path) -> list[Path]:
+    files = [repo / f for f in PROPAGATION_TARGETS]
+    gw = repo / ".github/workflows"
+    if gw.is_dir():
+        files += sorted(gw.glob("*.yml")) + sorted(gw.glob("*.yaml"))
+    return [f for f in files if f.is_file()]
+
+
+def swap_command(text: str, old: str, new: str) -> tuple[str, int]:
+    """Replace `old` only where it is a whole command, never inside a longer one —
+    `npm test` must not match the `npm test:integration` of a suite entry."""
+    pat = re.compile(r"(?<![\w:./-])" + re.escape(old) + r"(?![\w:./-])")
+    return pat.subn(lambda _: new, text)
+
+
+def yaml_error(text: str) -> str:
+    """Empty if the text parses; otherwise the parser's one-line complaint."""
+    try:
+        yaml.safe_load(text)
+        return ""
+    except yaml.YAMLError as e:
+        return str(getattr(e, "problem", None) or str(e).splitlines()[0]).strip()
+
+
+def swap_in_yaml(text: str, old: str, new: str) -> tuple[str, int, str]:
+    """Swap the command, keeping the host file parseable. A copy living inside a quoted
+    scalar (`run: "npm test"`) breaks when the new command carries quotes of its own, so
+    that case re-quotes the whole scalar instead of patching its insides."""
+    swapped, n = swap_command(text, old, new)
+    if not n:
+        return text, 0, ""
+    err = yaml_error(swapped)
+    if not err:
+        return swapped, n, ""
+    requoted, m = re.subn('"' + re.escape(old) + '"', lambda _: json.dumps(new), text)
+    if m and not yaml_error(requoted):
+        return requoted, m, ""
+    return text, 0, err
+
+
+def recorded_commands(cfg: dict) -> dict[str, str]:
+    """Every command the repo declares, flat: the four ops plus the test-suite commands,
+    which the pipeline contract wires into stages the same way."""
+    cmds = {k: str(v) for k, v in (cfg.get("commands") or {}).items() if v}
+    for s in cfg.get("test-suites") or []:
+        if s.get("name") and s.get("command"):
+            cmds[f"test-suites.{s['name']}"] = str(s["command"])
+    return cmds
+
+
+def propagate_commands(repo: Path, cfg: dict, previous: dict | None) -> list[str]:
+    """Push changed commands into the files that carry copies. Returns report lines."""
+    current = recorded_commands(cfg)
+    if previous is None:            # installed before this was recorded — arm it silently
+        return []
+    changed = {k: (previous[k], v) for k, v in current.items()
+               if k in previous and previous[k] != v}
+    if not changed:
+        return []
+
+    report = []
+    for key, (old, new) in changed.items():
+        report.append(f"  {key}: {old!r} → {new!r}")
+        hits, warns = [], []
+        for f in propagation_files(repo):
+            swapped, n, err = swap_in_yaml(f.read_text(), old, new)
+            if n:
+                f.write_text(swapped)
+                hits.append(f"{f.relative_to(repo)} ({n})")
+            elif err:
+                warns.append(f"    [warn] would break {f.relative_to(repo)} "
+                             f"({err}) — left untouched, fix it by hand")
+        report.append("    " + (", ".join(hits) if hits else
+                                "[warn] no file carried the old value — nothing updated"))
+        report += warns
+    return report
+
+
 # ---------------------------------------------------------------- install / update
 
 def cmd_install(args: argparse.Namespace) -> None:
@@ -575,16 +766,37 @@ def cmd_install(args: argparse.Namespace) -> None:
     tool = args.tool
     if tool != "claude-code":
         fail(f"tool '{tool}' is on the roadmap; only claude-code is compiled today.")
+    # validated before anything is written: a typo in `stacks:` must not get as far as
+    # rewriting the command chains and only then fail in the compiler
+    known = {f.stem for f in (harness_root / "core" / "stacks").glob("*.md")}
+    unknown = [s for s in (cfg.get("stacks") or []) if s not in known]
+    if unknown:
+        fail(f"unknown stack in {CONFIG}: {', '.join(unknown)} "
+             f"(known: {', '.join(sorted(known))})")
+
+    mpath = repo / MANIFEST
+    prev = json.loads(mpath.read_text()) if mpath.exists() else {}
+
+    # stacks first: a stack added or removed by hand rewrites the command chains in
+    # harness.yaml, and everything downstream must compile from the reconciled config
+    stack_report, stack_cmds = sync_stacks(repo, cfg, prev.get("stack_commands"))
+    if stack_report:
+        cfg = load_config(repo)
+
     files = compile_claude_code(harness_root, repo, cfg)
+    # both before the manifest is hashed, or a rewritten file reads as drifted
+    pruned = prune_orphans(repo, prev.get("files") or {}, files)
+    report = propagate_commands(repo, cfg, prev.get("commands"))
 
     version = core_version(harness_root)
     manifest = {
         "tool": tool,
         "core_version": version,
         "compiled_at": date.today().isoformat(),
+        "commands": recorded_commands(cfg),
+        "stack_commands": stack_cmds,
         "files": {str(p.relative_to(repo)): sha256(p) for p in files},
     }
-    mpath = repo / MANIFEST
     mpath.parent.mkdir(parents=True, exist_ok=True)
     mpath.write_text(json.dumps(manifest, indent=2) + "\n")
 
@@ -594,6 +806,15 @@ def cmd_install(args: argparse.Namespace) -> None:
     (repo / CONFIG).write_text(cfg_text)
 
     print(f"compiled {len(files)} files for {tool} (core v{version}).")
+    if pruned:
+        print(f"removed {len(pruned)} artifact(s) this config no longer generates:")
+        print("\n".join(f"  {rel}" for rel in pruned))
+    if stack_report:
+        print("reconciled commands with the stack list in harness.yaml:")
+        print("\n".join(stack_report))
+    if report:
+        print("propagated command changes from harness.yaml:")
+        print("\n".join(report))
     if shutil.which("lefthook"):
         subprocess.run(["lefthook", "install"], cwd=repo, check=False)
     else:

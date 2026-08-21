@@ -24,6 +24,9 @@ provider:
 
 stacks:                        # which engineer agents get compiled for this repo
   - javascript                 # javascript | csharp | python | rust
+  # Edit this list and run `harness update`: the stack's link is added to / removed from
+  # each `commands` chain below, its engineer agent is compiled, and the agent of a stack
+  # you dropped is deleted instead of lingering in .claude/agents/.
 bdd_frameworks:
   javascript: cucumber-js      # cucumber-js | vitest-gherkin
   csharp: reqnroll
@@ -35,6 +38,8 @@ commands:                      # used by lefthook, engineers and the pipeline co
   # pyproject, Cargo.toml, .sln), falling back to the stack's defaults; multi-stack
   # repos get the stacks chained with `&&`. `doctor` fails while one is a placeholder —
   # an `echo TODO` passes lefthook and the CI lint step as green.
+  # Edit them here, not in lefthook.yml: `harness update` propagates a changed value to
+  # every file that carries a copy (lefthook, pipelines). Same for test-suites commands.
   lint: "npm run lint"
   format: "npm run format"
   test_fast: "npm test"        # pre-push / CI-on-PR

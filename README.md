@@ -61,6 +61,23 @@ chains the two with `&&`. `--no-detect` skips the repo and uses defaults only. T
 is printed for review — these commands gate every commit and the CI-on-PR stage, and
 `doctor` fails while any of them is still a placeholder.
 
+`harness.yaml` stays the source of truth for them afterwards: edit a command there, run
+`harness update`, and the copies are rewritten in `lefthook.yml` and in the pipeline
+files (`azure-pipelines.yml`, `.gitlab-ci.yml`, `.github/workflows/*`). The match is on
+the value the last install recorded in the manifest, so a hand-tuned pipeline keeps
+everything else it says, and `npm test` never eats the `npm test:integration` of a suite
+entry. `test-suites[].command` propagates the same way — that coupling is what `doctor`
+checks when it asks whether a suite is wired to a stage. What no file carried, and what
+would have broken the host YAML, is reported instead of applied.
+
+`stacks:` reconciles the same way. Add one by hand and `update` appends that stack's
+link to every chain and compiles its `engineer-<stack>` agent; remove one and the link
+comes out — matched on what the last install recorded for *that* stack, so the other
+stacks' hand-tuned commands are untouched — and the orphaned agent is deleted. Without
+that deletion the repo keeps an agent for a stack it no longer has. Only `.claude/**`
+and `CLAUDE.md` are ever pruned; `lefthook.yml` is created once and belongs to the repo.
+An unknown stack name fails before anything is written.
+
 Core resolution order: `--core` flag → `$HARNESS_HOME` → `core_path` in `harness.yaml`
 → script location (checkout runs only). Without `HARNESS_HOME`, pass
 `--core ~/git/harness` on the first `init`; after that it's recorded in the repo.
@@ -122,8 +139,8 @@ checkout but the CLI is not:
 
 ```
 $ harness --version
-harness-cli 0.5.0
-core        0.5.0  (/Users/you/git/harness)
+harness-cli 0.7.0
+core        0.7.0  (/Users/you/git/harness)
 ```
 
 `harness doctor` warns on the same drift, and separately **fails** when a repo's

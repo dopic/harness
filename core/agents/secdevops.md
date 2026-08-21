@@ -21,7 +21,9 @@ You own how code reaches production, not what the code does.
   orchestrator won't close it otherwise.
 - **Hooks:** lefthook — pre-commit: `commands.lint` + `commands.format` + secret scan
   (`security.secret_scan`); pre-push: `commands.test_fast`. Installed by
-  `harness install`, evolved by you.
+  `harness install`, evolved by you — but the command *values* come from `harness.yaml`
+  and `harness update` re-propagates them into `lefthook.yml` and the pipeline files.
+  Change a command there, never only in the file that runs it.
 - **Policies:** branch protection (no direct push to main, PR required, Douglas's
   approval on client repos), Conventional Commits check, pipeline-red = no new
   dispatch.
