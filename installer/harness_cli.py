@@ -21,7 +21,7 @@ from pathlib import Path
 
 import yaml
 
-__version__ = "0.7.0"          # kept in lockstep with core/VERSION
+__version__ = "0.7.1"          # kept in lockstep with core/VERSION
 
 MANIFEST = ".harness/manifest.json"
 CONFIG = "harness.yaml"
@@ -631,8 +631,9 @@ def sync_stacks(repo: Path, cfg: dict, previous: dict | None) -> tuple[list[str]
     Returns the report and the per-stack record for the manifest."""
     stacks = [str(s) for s in (cfg.get("stacks") or ["javascript"])]
     current = {s: stack_command_set(repo, s) for s in stacks}
-    if previous is None:            # installed before this was recorded — arm it silently
-        return [], current
+    if previous is None:            # nothing recorded yet: no previous value to match on
+        return ["  [note] first run recording the per-stack commands — stack changes "
+                "propagate from the next `harness update`"], current
 
     added = [s for s in stacks if s not in previous]
     removed = [s for s in previous if s not in stacks]
@@ -677,6 +678,82 @@ def sync_stacks(repo: Path, cfg: dict, previous: dict | None) -> tuple[list[str]
 # in harness.yaml changed, matching on the value the last install recorded in the
 # manifest — so a hand-tuned pipeline keeps everything else it says.
 PROPAGATION_TARGETS = ["lefthook.yml", "azure-pipelines.yml", ".gitlab-ci.yml"]
+
+
+# Entries in lefthook.yml whose `run:` belongs to harness.yaml, not to the file.
+LEFTHOOK_OWNED = {
+    "lint": ["pre-commit", "commands", "lint", "run"],
+    "format": ["pre-commit", "commands", "format", "run"],
+    "test_fast": ["pre-push", "commands", "fast-tests", "run"],
+}
+
+
+def block_bounds(lines: list[str], start: int, end: int, key: str) -> tuple[int, int, int] | None:
+    """Line range and indentation of `key:` between start and end, by indentation."""
+    for i in range(start, end):
+        m = re.match(r"^(\s*)" + re.escape(key) + r":", lines[i])
+        if not m:
+            continue
+        indent = len(m.group(1))
+        j = i + 1
+        while j < end and (not lines[j].strip()
+                           or len(lines[j]) - len(lines[j].lstrip()) > indent):
+            j += 1
+        return i, j, indent
+    return None
+
+
+def set_yaml_path(text: str, path: list[str], value: str) -> tuple[str, bool]:
+    """Rewrite one scalar addressed by a key path, touching only its line — the rest of
+    the file (comments, extra hooks, `glob:`/`parallel:` tuning) is left as it is."""
+    lines = text.splitlines(keepends=True)
+    start, end = 0, len(lines)
+    for key in path:
+        found = block_bounds(lines, start, end, key)
+        if not found:
+            return text, False
+        i, j, indent = found
+        start, end = i, j
+    lines[start] = " " * indent + f"{path[-1]}: {json.dumps(value)}\n"
+    return "".join(lines), True
+
+
+def sync_lefthook(repo: Path, cfg: dict) -> list[str]:
+    """harness.yaml wins for the `run:` of the entries harness put there. Unlike the
+    pipeline files — arbitrary YAML, so they can only be matched by their previous value
+    — lefthook.yml has a shape harness knows, so this needs no manifest history and
+    repairs a copy that drifted for any reason."""
+    lh = repo / "lefthook.yml"
+    if not lh.exists():
+        return []
+    text = lh.read_text()
+    try:
+        doc = yaml.safe_load(text) or {}
+    except yaml.YAMLError as e:
+        return [f"  [warn] lefthook.yml does not parse ({yaml_error(text) or e}) — skipped"]
+
+    cmds = cfg.get("commands") or {}
+    report = []
+    for key, path in LEFTHOOK_OWNED.items():
+        want = str(cmds.get(key, "")).strip()
+        if not want:
+            continue
+        node = doc
+        for seg in path[:-1]:
+            node = node.get(seg) or {} if isinstance(node, dict) else {}
+        have = node.get("run") if isinstance(node, dict) else None
+        if have is None:               # entry renamed or removed on purpose — respect it
+            continue
+        if str(have).strip() == want:
+            continue
+        text, ok = set_yaml_path(text, path, want)
+        report.append(f"  {'/'.join(path[:-1])}: {str(have)!r} → {want!r}"
+                      if ok else
+                      f"  [warn] {key}: lefthook.yml carries {have!r} but the line could "
+                      "not be rewritten — fix it by hand")
+    if report:
+        lh.write_text(text)
+    return report
 
 
 def propagation_files(repo: Path) -> list[Path]:
@@ -732,8 +809,9 @@ def recorded_commands(cfg: dict) -> dict[str, str]:
 def propagate_commands(repo: Path, cfg: dict, previous: dict | None) -> list[str]:
     """Push changed commands into the files that carry copies. Returns report lines."""
     current = recorded_commands(cfg)
-    if previous is None:            # installed before this was recorded — arm it silently
-        return []
+    if previous is None:            # nothing recorded yet: no previous value to match on
+        return ["  [note] first run recording the commands — pipeline files propagate "
+                "from the next `harness update` (lefthook.yml is synced either way)"]
     changed = {k: (previous[k], v) for k, v in current.items()
                if k in previous and previous[k] != v}
     if not changed:
@@ -787,6 +865,9 @@ def cmd_install(args: argparse.Namespace) -> None:
     # both before the manifest is hashed, or a rewritten file reads as drifted
     pruned = prune_orphans(repo, prev.get("files") or {}, files)
     report = propagate_commands(repo, cfg, prev.get("commands"))
+    # last word on lefthook.yml: structural, so it converges even when there is no
+    # previous value to match on (a repo installed before the manifest recorded them)
+    lh_report = sync_lefthook(repo, cfg)
 
     version = core_version(harness_root)
     manifest = {
@@ -815,6 +896,9 @@ def cmd_install(args: argparse.Namespace) -> None:
     if report:
         print("propagated command changes from harness.yaml:")
         print("\n".join(report))
+    if lh_report:
+        print("synced lefthook.yml with harness.yaml:")
+        print("\n".join(lh_report))
     if shutil.which("lefthook"):
         subprocess.run(["lefthook", "install"], cwd=repo, check=False)
     else:
