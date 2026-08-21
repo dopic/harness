@@ -8,6 +8,11 @@ applies-to: [secdevops, qa, orchestrator]
 - **Every repo has, minimum:** lefthook (pre-commit: lint + format + secret scan;
   pre-push: `commands.test_fast`) and a CI pipeline with lint, fast tests, SAST and
   dependency scan on every PR.
+- **`harness.yaml` owns the command strings.** `harness update` rewrites them in
+  `lefthook.yml` and in the pipeline files; you never change a command only where it
+  runs. `doctor` fails when `commands.lint` or `commands.test_fast` appears in no stage —
+  a stage that wraps one declares itself with a `[harness:lint]` / `[harness:test_fast]`
+  marker, the same way suites use `[suite:<name>]`.
 - **Branch protection:** no direct pushes to main; PR required; client repos also
   require Douglas's approval on merge (the cheap human second eye).
 - **The test-suite contract is part of the pipeline.** Every entry in

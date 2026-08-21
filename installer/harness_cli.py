@@ -21,7 +21,7 @@ from pathlib import Path
 
 import yaml
 
-__version__ = "0.7.1"          # kept in lockstep with core/VERSION
+__version__ = "0.7.2"          # kept in lockstep with core/VERSION
 
 MANIFEST = ".harness/manifest.json"
 CONFIG = "harness.yaml"
@@ -163,6 +163,9 @@ def core_version(harness_root: Path) -> str:
 # ---------------------------------------------------------------- stack commands
 
 COMMAND_KEYS = ["lint", "format", "test_fast", "build"]
+# The pipeline contract (core/rules/pipelines.md): lint and fast tests run on every PR.
+# A stage that wraps the command instead of running it verbatim says so with a marker.
+PIPELINE_COMMANDS = ["lint", "test_fast"]
 
 # Last-resort defaults: what a stack's toolchain does when the repo says nothing.
 # `init` prefers whatever the detectors below read off the repo; these only fill gaps,
@@ -1067,6 +1070,23 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     if gw.is_dir():
         pipeline_files += list(gw.glob("*.yml")) + list(gw.glob("*.yaml"))
     pipeline_text = "\n".join(p.read_text() for p in pipeline_files)
+
+    # A pipeline file is arbitrary YAML written by secdevops, so `update` can only
+    # rewrite a command there by matching its previous value. When that match is lost,
+    # the stage silently keeps running the old command — this is what catches it.
+    if pipeline_files:
+        for key in PIPELINE_COMMANDS:
+            want = str(cmds.get(key, "")).strip()
+            if not want or "TODO" in want:
+                continue
+            wired = want in pipeline_text or f"[harness:{key}]" in pipeline_text
+            failures += not check(wired, f"commands.{key} runs in a pipeline", "" if wired
+                                  else f"no stage runs {want!r} — `harness update` "
+                                  f"propagates it, or mark the stage [harness:{key}] if "
+                                  "it wraps the command")
+    else:
+        print("  [note] no pipeline file in the repo yet — secdevops writes it (`/pipeline`)")
+
     for s in suites:
         pth = repo / s.get("path", "")
         failures += not check(pth.exists(), f"suite '{s['name']}' path exists", s.get("path", ""))

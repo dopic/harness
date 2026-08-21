@@ -71,7 +71,9 @@ file converges no matter how it drifted. The rest of the file is untouched: extr
 `parallel:`, `glob:`, comments, and an entry you renamed (harness then leaves it alone).
 The pipeline files are arbitrary YAML, so they can only be matched by the value the last
 install recorded in the manifest — a hand-tuned pipeline keeps everything else it says,
-and `npm test` never eats the `npm test:integration` of a suite entry. `test-suites[].command` propagates the same way — that coupling is what `doctor`
+and `npm test` never eats the `npm test:integration` of a suite entry. Since that match
+can be lost, `doctor` fails when `commands.lint` or `commands.test_fast` runs in no
+stage; a stage that wraps one declares itself with a `[harness:lint]` marker. `test-suites[].command` propagates the same way — that coupling is what `doctor`
 checks when it asks whether a suite is wired to a stage. What no file carried, and what
 would have broken the host YAML, is reported instead of applied.
 
@@ -144,8 +146,8 @@ checkout but the CLI is not:
 
 ```
 $ harness --version
-harness-cli 0.7.1
-core        0.7.1  (/Users/you/git/harness)
+harness-cli 0.7.2
+core        0.7.2  (/Users/you/git/harness)
 ```
 
 `harness doctor` warns on the same drift, and separately **fails** when a repo's

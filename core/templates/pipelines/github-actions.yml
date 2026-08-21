@@ -1,6 +1,10 @@
 # Baseline GitHub Actions skeleton — secdevops adapts per repo (commands come from
 # harness.yaml → commands / test-suites). Jobs marked [suite:<name>] are the
 # materialization of the test-suites contract; `harness doctor` greps for these markers.
+# Same for the commands: doctor checks that `commands.lint` and `commands.test_fast`
+# appear verbatim. A step that wraps one (a make target, a composite action) marks itself
+# [harness:lint] / [harness:test_fast] instead. Change a command in harness.yaml and
+# `harness update` rewrites it here — never edit it only in this file.
 #
 # Install as .github/workflows/harness.yml. Pushing this file requires a token with the
 # `workflow` scope (gh auth refresh -s workflow).
