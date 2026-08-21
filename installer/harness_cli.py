@@ -285,10 +285,11 @@ def compile_claude_code(harness_root: Path, repo: Path, cfg: dict) -> list[Path]
     if not lh.exists():
         cmds = cfg.get("commands", {})
         scan = cfg.get("security", {}).get("secret_scan", "gitleaks")
+        q = json.dumps  # YAML-safe scalar: commands routinely contain `:` and quotes
         write("lefthook.yml", LEFTHOOK_TEMPLATE.format(
-            lint=cmds.get("lint", "echo no lint configured"),
-            fmt=cmds.get("format", "echo no format configured"),
-            test=cmds.get("test_fast", "echo no fast tests configured"),
+            lint=q(cmds.get("lint", "echo no lint configured")),
+            fmt=q(cmds.get("format", "echo no format configured")),
+            test=q(cmds.get("test_fast", "echo no fast tests configured")),
             scan=scan))
     return out
 
@@ -342,7 +343,7 @@ pre-commit:
     format:
       run: {fmt}
     secrets:
-      run: {scan} protect --staged --no-banner || {scan} git --staged --no-banner || true
+      run: "{scan} protect --staged --no-banner || {scan} git --staged --no-banner || true"
 
 pre-push:
   commands:
