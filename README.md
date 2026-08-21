@@ -53,6 +53,14 @@ harness doctor                      # config, provider auth, labels, drift check
 item types and tags are native fields). On GitHub it is **not** optional — `gh issue
 create --label` fails on a label that does not exist yet, so nothing works before it.
 
+`init` also fills `commands:` (lint/format/test_fast/build) by reading the repo: the
+committed lockfile picks the JS package manager and the `package.json` scripts, ruff /
+poetry / uv show up in `pyproject.toml`, `[workspace]` in `Cargo.toml`, the `.sln` for
+dotnet. What it cannot read falls back to the stack's default, and `--stacks js,rust`
+chains the two with `&&`. `--no-detect` skips the repo and uses defaults only. The guess
+is printed for review — these commands gate every commit and the CI-on-PR stage, and
+`doctor` fails while any of them is still a placeholder.
+
 Core resolution order: `--core` flag → `$HARNESS_HOME` → `core_path` in `harness.yaml`
 → script location (checkout runs only). Without `HARNESS_HOME`, pass
 `--core ~/git/harness` on the first `init`; after that it's recorded in the repo.
@@ -114,8 +122,8 @@ checkout but the CLI is not:
 
 ```
 $ harness --version
-harness-cli 0.4.0
-core        0.4.0  (/Users/you/git/harness)
+harness-cli 0.5.0
+core        0.5.0  (/Users/you/git/harness)
 ```
 
 `harness doctor` warns on the same drift, and separately **fails** when a repo's

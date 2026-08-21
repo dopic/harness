@@ -21,7 +21,7 @@ from pathlib import Path
 
 import yaml
 
-__version__ = "0.4.0"          # kept in lockstep with core/VERSION
+__version__ = "0.5.0"          # kept in lockstep with core/VERSION
 
 MANIFEST = ".harness/manifest.json"
 CONFIG = "harness.yaml"
@@ -160,6 +160,123 @@ def core_version(harness_root: Path) -> str:
     return (harness_root / "core" / "VERSION").read_text().strip()
 
 
+# ---------------------------------------------------------------- stack commands
+
+COMMAND_KEYS = ["lint", "format", "test_fast", "build"]
+
+# Last-resort defaults: what a stack's toolchain does when the repo says nothing.
+# `init` prefers whatever the detectors below read off the repo; these only fill gaps,
+# so an unconfigured key fails loudly instead of passing as a green `echo TODO`.
+STACK_COMMANDS = {
+    "javascript": {"lint": "yarn lint", "format": "yarn format",
+                   "test_fast": "yarn test", "build": "yarn build"},
+    "csharp":     {"lint": "dotnet format --verify-no-changes", "format": "dotnet format",
+                   "test_fast": "dotnet test", "build": "dotnet build -c Release"},
+    "python":     {"lint": "ruff check .", "format": "ruff format .",
+                   "test_fast": "pytest -q", "build": "python -m build"},
+    "rust":       {"lint": "cargo clippy --all-targets -- -D warnings",
+                   "format": "cargo fmt --all",
+                   "test_fast": "cargo test", "build": "cargo build --locked"},
+}
+# The committed lockfile picks the package manager — never the other way round.
+JS_RUNNERS = [("bun.lockb", "bun run"), ("bun.lock", "bun run"),
+              ("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"),
+              ("package-lock.json", "npm run")]
+# First script that exists wins; the head of each list is the fallback name, so a repo
+# with no `lint` script gets `yarn lint` (fails at the hook) rather than a silent pass.
+JS_SCRIPTS = {"lint": ["lint", "lint:check", "eslint"],
+              "format": ["format", "fmt", "prettier"],
+              "test_fast": ["test:unit", "test"],
+              "build": ["build", "compile"]}
+
+
+def detect_javascript(repo: Path) -> dict[str, str]:
+    runner = next((r for f, r in JS_RUNNERS if (repo / f).exists()), "yarn")
+    scripts: dict = {}
+    pkg = repo / "package.json"
+    if pkg.exists():
+        try:
+            scripts = (json.loads(pkg.read_text()) or {}).get("scripts") or {}
+        except (json.JSONDecodeError, OSError):
+            scripts = {}
+    return {key: f"{runner} {next((n for n in names if n in scripts), names[0])}"
+            for key, names in JS_SCRIPTS.items()}
+
+
+def detect_rust(repo: Path) -> dict[str, str]:
+    cargo = repo / "Cargo.toml"
+    if not cargo.exists():
+        return {}
+    ws = ["--workspace"] if "[workspace]" in cargo.read_text() else []
+    j = lambda *parts: " ".join(["cargo", parts[0], *ws, *parts[1:]])   # noqa: E731
+    return {"lint": j("clippy", "--all-targets", "--", "-D", "warnings"),
+            "format": "cargo fmt --all",
+            "test_fast": j("test"),
+            "build": j("build", "--locked")}
+
+
+def detect_python(repo: Path) -> dict[str, str]:
+    py = repo / "pyproject.toml"
+    text = py.read_text() if py.exists() else ""
+    # The runner has to match how deps were installed, or the tools are not on PATH.
+    prefix = ("uv run " if (repo / "uv.lock").exists() else
+              "poetry run " if "[tool.poetry]" in text else "")
+    out = {}
+    if "ruff" in text or (repo / "ruff.toml").exists() or (repo / ".ruff.toml").exists():
+        out["lint"] = prefix + "ruff check ."
+        out["format"] = prefix + "ruff format ."
+    elif "black" in text or "flake8" in text:
+        out["lint"] = prefix + "flake8 ."
+        out["format"] = prefix + "black ."
+    if "pytest" in text or (repo / "tests").is_dir():
+        out["test_fast"] = prefix + "pytest -q"
+    if "[build-system]" in text:
+        out["build"] = prefix + "python -m build"
+    return out
+
+
+def detect_csharp(repo: Path) -> dict[str, str]:
+    found = (sorted(repo.glob("*.sln")) or sorted(repo.glob("*/*.sln"))
+             or sorted(repo.glob("*.csproj")) or sorted(repo.glob("*/*.csproj")))
+    if not found:
+        return {}
+    t = " " + shlex.quote(str(found[0].relative_to(repo)))
+    return {"lint": f"dotnet format{t} --verify-no-changes",
+            "format": f"dotnet format{t}",
+            "test_fast": f"dotnet test{t}",
+            "build": f"dotnet build{t} -c Release"}
+
+
+DETECTORS = {"javascript": detect_javascript, "csharp": detect_csharp,
+             "python": detect_python, "rust": detect_rust}
+
+
+def resolve_commands(repo: Path, stacks: list[str], detect: bool = True) -> dict[str, str]:
+    """One command per key for the whole repo. A multi-stack repo chains its stacks in
+    declaration order with `&&` — the first stack that fails stops the chain, which is
+    what lefthook and the pipeline contract expect from a single command string."""
+    per_stack = []
+    for stack in stacks:
+        cmds = dict(STACK_COMMANDS.get(stack, {}))
+        if detect and stack in DETECTORS:
+            cmds.update({k: v for k, v in DETECTORS[stack](repo).items() if v})
+        per_stack.append(cmds)
+    out = {}
+    for key in COMMAND_KEYS:
+        parts: list[str] = []
+        for cmds in per_stack:
+            c = cmds.get(key)
+            if c and c not in parts:
+                parts.append(c)
+        out[key] = " && ".join(parts) if parts else f"echo TODO: {key}"
+    return out
+
+
+def render_commands(cmds: dict[str, str]) -> str:
+    q = json.dumps            # YAML-safe scalar: commands carry `:`, quotes and `&&`
+    return "".join(f"  {k}: {q(cmds[k])}\n" for k in COMMAND_KEYS)
+
+
 # ---------------------------------------------------------------- init
 
 INIT_TEMPLATE = """harness:
@@ -182,11 +299,7 @@ bdd_frameworks:
   rust: cucumber-rs
 
 commands:
-  lint: "echo TODO: lint"
-  format: "echo TODO: format"
-  test_fast: "echo TODO: fast tests"
-  build: "echo TODO: build"
-
+{commands}
 security:
   asvs_level: 1
   secret_scan: gitleaks
@@ -217,7 +330,8 @@ def cmd_init(args: argparse.Namespace) -> None:
     cfg_path = repo / CONFIG
     if cfg_path.exists() and not args.force:
         fail(f"{CONFIG} already exists in {repo} (use --force to overwrite).")
-    stacks = args.stacks.split(",") if args.stacks else ["javascript"]
+    stacks = [s.strip() for s in args.stacks.split(",")] if args.stacks else ["javascript"]
+    commands = resolve_commands(repo, stacks, detect=not args.no_detect)
     def_org, def_project = PROVIDER_INIT_DEFAULTS[args.provider]
     cfg_path.write_text(INIT_TEMPLATE.format(
         version=core_version(harness_root),
@@ -227,7 +341,8 @@ def cmd_init(args: argparse.Namespace) -> None:
         project=args.project or def_project,
         repo_name=args.repository or repo.name,
         gates=", ".join(GATE_TAGS),
-        stacks="".join(f"  - {s.strip()}\n" for s in stacks),
+        stacks="".join(f"  - {s}\n" for s in stacks),
+        commands=render_commands(commands),
     ))
     for d in ["docs/architecture/adrs", "docs/architecture/diagrams",
               ".harness/overrides/rules"]:
@@ -237,6 +352,10 @@ def cmd_init(args: argparse.Namespace) -> None:
         reg.write_text("# Feature toggle registry\n\n(see harness "
                        "core/templates/toggles/feature-toggle.md)\n")
     print(f"initialized: {cfg_path}")
+    src = "stack defaults" if args.no_detect else "the repo + stack defaults"
+    print(f"commands (from {src} — review them, they gate commits and CI):")
+    for k in COMMAND_KEYS:
+        print(f"  {k}: {commands[k]}")
     if args.provider == "github":
         print("next: edit harness.yaml (provider.organization = owner, "
               "provider.repository = repo name; provider.project is an optional "
@@ -566,6 +685,14 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                           "missing: " + ", ".join(sorted(set(GATE_TAGS) - set(gates)))
                           if not set(GATE_TAGS) <= set(gates) else "")
 
+    # commands gate every commit (lefthook) and the CI-on-PR stage: an `echo TODO`
+    # placeholder passes both, so it reads as green while nothing is being checked.
+    cmds = cfg.get("commands") or {}
+    unset = [k for k in COMMAND_KEYS
+             if not str(cmds.get(k, "")).strip() or "TODO" in str(cmds.get(k, ""))]
+    failures += not check(not unset, "commands configured",
+                          "placeholder/missing: " + ", ".join(unset) if unset else "")
+
     # provider CLI auth
     kind = cfg.get("provider", {}).get("kind")
     cli, auth_cmd = {
@@ -681,6 +808,8 @@ def main() -> None:
     p.add_argument("--project")
     p.add_argument("--repository")
     p.add_argument("--stacks", help="comma-separated: javascript,csharp,python,rust")
+    p.add_argument("--no-detect", action="store_true",
+                   help="skip reading the repo; use the stacks' default commands")
     p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_init)
 

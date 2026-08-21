@@ -31,6 +31,10 @@ bdd_frameworks:
   rust: cucumber-rs
 
 commands:                      # used by lefthook, engineers and the pipeline contract
+  # `harness init` pre-fills these from the repo (lockfile + package.json scripts,
+  # pyproject, Cargo.toml, .sln), falling back to the stack's defaults; multi-stack
+  # repos get the stacks chained with `&&`. `doctor` fails while one is a placeholder —
+  # an `echo TODO` passes lefthook and the CI lint step as green.
   lint: "npm run lint"
   format: "npm run format"
   test_fast: "npm test"        # pre-push / CI-on-PR
