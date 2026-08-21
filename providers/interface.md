@@ -36,3 +36,10 @@ vocabulary mapping), not code — the executing agent runs the recipe's commands
   stays free for the client's process. Exactly one `harness:*` gate tag per item.
 - Adapters must be honest about what the provider lacks (e.g., GitHub has no native
   Epic): the mapping says how the gap is bridged, never pretends it isn't there.
+- Where item type and gate state are labels rather than native fields (GitHub, GitLab),
+  the vocabulary must exist upstream before the first `create_item` — that bootstrap is
+  `harness provider-setup`, and `harness doctor` verifies it.
+- `approve` / `request_changes` are verdicts, not necessarily API calls. A provider that
+  refuses a review from the identity that opened the PR (GitHub) still has to express
+  the verdict somewhere the orchestrator can read it; the adapter defines exactly where
+  and in what syntax.

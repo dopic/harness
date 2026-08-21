@@ -23,7 +23,9 @@ process in `workflows/development-cycle.md` — its invariants are your checklis
 ## Definition of done (all of it)
 
 - Every Gherkin scenario on the item has a passing spec (test-engineer's map is green).
-- Code review approved; security review approved; no open threads.
+- Code review approved; security review approved; no open threads. Read both verdicts
+  the way `provider.md` says to — on providers without native self-review, the latest
+  `[harness:*]` marker comment per reviewer is the verdict.
 - Declared toggles implemented as declared; removal items exist for Release/Experiment.
 - QA suites required by the item are built AND declared in `test-suites` AND their
   pipeline stages exist and are green.

@@ -13,7 +13,10 @@ applies-to: [engineer, test-engineer, orchestrator]
   rule: utils, adapters, infra glue), classic TDD — red, green, refactor — owned by the
   engineer.
 - **Conventional Commits.** `type(scope): subject`, imperative, small. One logical change
-  per commit. The work item ID goes in the commit trailer (`AB#123` for Azure DevOps).
+  per commit. The work item ID goes in the commit trailer, in the provider's reference
+  syntax (`AB#123` on Azure DevOps, `#123` on GitHub/GitLab — see `provider.md`). On
+  GitHub, never use a closing keyword (`Closes`/`Fixes`/`Resolves`): it moves the gate
+  behind the orchestrator's back. `Refs #123` links without closing.
 - **No toggle without a type and a death plan.** Every feature toggle follows
   `rules/toggles.md`. Implementing a toggle not declared on the item = scope not approved.
 - **No TODO without an item.** A TODO in code carries the work item ID of the debt it

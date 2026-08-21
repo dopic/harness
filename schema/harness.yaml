@@ -6,10 +6,19 @@ harness:
 
 provider:
   kind: azure-devops           # azure-devops | github | gitlab
+  # Field meaning depends on kind:
+  #   azure-devops → organization: org URL · project: team project · repository: repo
+  #   github       → organization: owner (org OR user login) · repository: repo name
+  #                  project: OPTIONAL Projects v2 board title ("" = harness ignores it;
+  #                  gate state lives in labels either way)
+  #   gitlab       → organization: group · project: "" · repository: project path
   organization: "https://dev.azure.com/YOUR_ORG"
   project: "YourProject"
   repository: "your-repo"
-  # Gate states are tags on work items (ADO) or labels (GitHub/GitLab).
+  # Gate states are tags on work items (ADO) or labels (GitHub/GitLab). On the
+  # label-based providers, run `harness provider-setup` once to create these plus the
+  # type:* and arch-review/security-review labels — `gh issue create --label` fails on
+  # a label that does not exist yet.
   # Do not rename: agents and WIQL queries reference them literally.
   gate_tags: [harness:proposed, harness:approved, harness:in-dev, harness:in-review, harness:done, harness:needs-revision]
 

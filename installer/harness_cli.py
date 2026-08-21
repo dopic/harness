@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,46 @@ GATE_TAGS = [
     "harness:proposed", "harness:approved", "harness:in-dev",
     "harness:in-review", "harness:done", "harness:needs-revision",
 ]
+# Item types and routing flags are native fields on Azure DevOps but plain labels on
+# GitHub/GitLab, so they have to be bootstrapped there before any item can be created.
+TYPE_LABELS = ["type:user-story", "type:bug", "type:tech-debt", "type:spike"]
+ROUTING_LABELS = ["arch-review", "security-review"]
+LABEL_STYLE = {
+    "harness:proposed":       ("D4C5F9", "Harness gate: written, awaiting human approval"),
+    "harness:approved":       ("0E8A16", "Harness gate: approved — the orchestrator may pick it up"),
+    "harness:in-dev":         ("1D76DB", "Harness gate: specs and implementation in progress"),
+    "harness:in-review":      ("FBCA04", "Harness gate: PR open, under review"),
+    "harness:done":           ("6E7681", "Harness gate: delivered, pipeline green"),
+    "harness:needs-revision": ("B60205", "Harness gate: rejected — issue-writer rewrites it"),
+    "type:user-story":        ("0052CC", "Harness item type: user story"),
+    "type:bug":               ("D73A4A", "Harness item type: bug"),
+    "type:tech-debt":         ("BFD4F2", "Harness item type: tech debt"),
+    "type:spike":             ("C2E0C6", "Harness item type: spike"),
+    "arch-review":            ("E99695", "Routing flag: software-architect reviews before dev"),
+    "security-review":        ("F9D0C4", "Routing flag: security-reviewer does a design pass"),
+}
+# Providers whose vocabulary lives in labels that must exist before first use.
+LABEL_BASED_PROVIDERS = {"github", "gitlab"}
+PROVIDER_INIT_DEFAULTS = {
+    "azure-devops": ("https://dev.azure.com/YOUR_ORG", "YourProject"),
+    "github":       ("YOUR_GITHUB_OWNER", ""),
+    "gitlab":       ("YOUR_GITLAB_GROUP", ""),
+}
+PIPELINE_TEMPLATE = {
+    "azure-devops": "azure-pipelines.yml",
+    "github": "github-actions.yml",
+}
+
+
+def expected_labels(cfg: dict) -> list[str]:
+    gates = cfg.get("provider", {}).get("gate_tags") or GATE_TAGS
+    return list(gates) + TYPE_LABELS + ROUTING_LABELS
+
+
+def repo_slug(cfg: dict) -> str:
+    prov = cfg.get("provider", {})
+    owner = str(prov.get("organization", "")).rstrip("/").split("/")[-1]
+    return f"{owner}/{prov.get('repository', '')}"
 
 
 # ---------------------------------------------------------------- helpers
@@ -33,6 +74,12 @@ GATE_TAGS = [
 def fail(msg: str) -> None:
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def last_line(text: str) -> str:
+    """Last non-empty line of a CLI's output — the part that says what went wrong."""
+    lines = [ln for ln in (text or "").strip().splitlines() if ln.strip()]
+    return lines[-1].strip() if lines else ""
 
 
 def sha256(p: Path) -> str:
@@ -136,12 +183,13 @@ def cmd_init(args: argparse.Namespace) -> None:
     if cfg_path.exists() and not args.force:
         fail(f"{CONFIG} already exists in {repo} (use --force to overwrite).")
     stacks = args.stacks.split(",") if args.stacks else ["javascript"]
+    def_org, def_project = PROVIDER_INIT_DEFAULTS[args.provider]
     cfg_path.write_text(INIT_TEMPLATE.format(
         version=core_version(harness_root),
         core_path=str(harness_root),
         provider=args.provider,
-        org=args.organization or "https://dev.azure.com/YOUR_ORG",
-        project=args.project or "YourProject",
+        org=args.organization or def_org,
+        project=args.project or def_project,
         repo_name=args.repository or repo.name,
         gates=", ".join(GATE_TAGS),
         stacks="".join(f"  - {s.strip()}\n" for s in stacks),
@@ -154,8 +202,15 @@ def cmd_init(args: argparse.Namespace) -> None:
         reg.write_text("# Feature toggle registry\n\n(see harness "
                        "core/templates/toggles/feature-toggle.md)\n")
     print(f"initialized: {cfg_path}")
-    print("next: edit harness.yaml (provider org/project, commands), "
-          "then `harness install --tool claude-code`")
+    if args.provider == "github":
+        print("next: edit harness.yaml (provider.organization = owner, "
+              "provider.repository = repo name; provider.project is an optional "
+              "Projects v2 board title), then:")
+        print("      harness provider-setup            # creates the harness:* / type:* labels")
+        print("      harness install --tool claude-code")
+    else:
+        print("next: edit harness.yaml (provider org/project, commands), "
+              "then `harness install --tool claude-code`")
 
 
 # ---------------------------------------------------------------- compile (claude-code)
@@ -181,14 +236,19 @@ def compile_claude_code(harness_root: Path, repo: Path, cfg: dict) -> list[Path]
     for tsub in ["issues", "architecture", "toggles"]:
         for p in sorted((core / "templates" / tsub).glob("*")):
             write(f".claude/harness/templates/{tsub}/{p.name}", p.read_text())
-    for p in sorted((core / "templates" / "pipelines").glob("*")):
-        write(f".claude/harness/templates/pipelines/{p.name}", p.read_text())
-
     # provider adapter (+ interface)
     kind = cfg.get("provider", {}).get("kind", "azure-devops")
     adapter = harness_root / "providers" / f"{kind}.md"
     if not adapter.exists():
         fail(f"unknown provider kind: {kind}")
+
+    # only this provider's pipeline template — secdevops must not see three CI dialects
+    pipelines = core / "templates" / "pipelines"
+    wanted = PIPELINE_TEMPLATE.get(kind)
+    chosen = [pipelines / wanted] if wanted and (pipelines / wanted).exists() else \
+        sorted(pipelines.glob("*"))
+    for p in chosen:
+        write(f".claude/harness/templates/pipelines/{p.name}", p.read_text())
     write(".claude/harness/provider.md",
           (harness_root / "providers" / "interface.md").read_text()
           + "\n\n---\n\n" + adapter.read_text())
@@ -285,10 +345,11 @@ def compile_claude_code(harness_root: Path, repo: Path, cfg: dict) -> list[Path]
     if not lh.exists():
         cmds = cfg.get("commands", {})
         scan = cfg.get("security", {}).get("secret_scan", "gitleaks")
+        q = json.dumps  # YAML-safe scalar: commands routinely contain `:` and quotes
         write("lefthook.yml", LEFTHOOK_TEMPLATE.format(
-            lint=cmds.get("lint", "echo no lint configured"),
-            fmt=cmds.get("format", "echo no format configured"),
-            test=cmds.get("test_fast", "echo no fast tests configured"),
+            lint=q(cmds.get("lint", "echo no lint configured")),
+            fmt=q(cmds.get("format", "echo no format configured")),
+            test=q(cmds.get("test_fast", "echo no fast tests configured")),
             scan=scan))
     return out
 
@@ -342,7 +403,7 @@ pre-commit:
     format:
       run: {fmt}
     secrets:
-      run: {scan} protect --staged --no-banner || {scan} git --staged --no-banner || true
+      run: "{scan} protect --staged --no-banner || {scan} git --staged --no-banner || true"
 
 pre-push:
   commands:
@@ -394,6 +455,50 @@ def cmd_update(args: argparse.Namespace) -> None:
     cmd_install(args)
 
 
+# ---------------------------------------------------------------- provider-setup
+
+def cmd_provider_setup(args: argparse.Namespace) -> None:
+    """Create the vocabulary the adapter needs upstream. Idempotent; mutates the remote."""
+    repo = Path(args.repo).resolve()
+    cfg = load_config(repo)
+    kind = cfg.get("provider", {}).get("kind")
+    if kind not in LABEL_BASED_PROVIDERS:
+        print(f"provider '{kind}' carries item type and gate state in native fields — "
+              "nothing to bootstrap.")
+        return
+    if kind == "gitlab":
+        fail("gitlab bootstrap is not implemented yet — see providers/gitlab.md.")
+
+    slug = repo_slug(cfg)
+    if "/" not in slug or slug.startswith("/") or slug.endswith("/"):
+        fail(f"harness.yaml must set provider.organization (owner) and "
+             f"provider.repository — got '{slug}'.")
+    if shutil.which("gh") is None:
+        fail("`gh` not found — install the GitHub CLI first.")
+
+    labels = expected_labels(cfg)
+    print(f"bootstrapping {len(labels)} labels on {slug}"
+          + (" (dry run)" if args.dry_run else ""))
+    failed = []
+    for name in labels:
+        color, desc = LABEL_STYLE.get(name, ("EDEDED", "Harness label"))
+        cmd = ["gh", "label", "create", name, "--color", color,
+               "--description", desc, "--force", "-R", slug]
+        if args.dry_run:
+            print(f"  would run: {shlex.join(cmd)}")
+            continue
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode == 0:
+            print(f"  [ok ] {name}")
+        else:
+            failed.append(name)
+            print(f"  [FAIL] {name} — {last_line(r.stderr or r.stdout)}")
+    if failed:
+        fail(f"{len(failed)} label(s) could not be created: {', '.join(failed)}")
+    if not args.dry_run:
+        print("labels ready. Next: `harness install --tool claude-code` (or `harness doctor`).")
+
+
 # ---------------------------------------------------------------- doctor
 
 def check(ok: bool, label: str, detail: str = "") -> bool:
@@ -429,15 +534,47 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         "github": ("gh", ["gh", "auth", "status"]),
         "gitlab": ("glab", ["glab", "auth", "status"]),
     }.get(kind, (None, None))
+    authed = False
     if cli:
         present = shutil.which(cli) is not None
         failures += not check(present, f"provider CLI `{cli}` installed")
         if present:
-            r = subprocess.run(auth_cmd, capture_output=True)
-            failures += not check(r.returncode == 0, f"`{cli}` authenticated",
-                                  "" if r.returncode == 0 else "login/PAT needed")
+            r = subprocess.run(auth_cmd, capture_output=True, text=True)
+            authed = r.returncode == 0
+            failures += not check(authed, f"`{cli}` authenticated",
+                                  "" if authed else "login/PAT needed")
+            if kind == "github" and authed:
+                scopes = (r.stdout or "") + (r.stderr or "")
+                if "workflow" not in scopes:
+                    print("  [warn] token lacks the `workflow` scope — secdevops cannot "
+                          "push .github/workflows/** (`gh auth refresh -s workflow`)")
     else:
         failures += not check(False, "provider kind known", str(kind))
+
+    # label vocabulary must exist upstream before any item can be created
+    if kind in LABEL_BASED_PROVIDERS:
+        want = expected_labels(cfg)
+        if kind == "github" and authed:
+            slug = repo_slug(cfg)
+            r = subprocess.run(["gh", "label", "list", "-R", slug, "--limit", "200",
+                                "--json", "name", "--jq", ".[].name"],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                failures += not check(False, "provider labels readable",
+                                      f"{slug}: {last_line(r.stderr)}")
+            else:
+                have = {ln.strip() for ln in r.stdout.splitlines() if ln.strip()}
+                missing = [x for x in want if x not in have]
+                failures += not check(not missing, "provider labels bootstrapped",
+                                      "missing: " + ", ".join(missing)
+                                      + " → run `harness provider-setup`" if missing else "")
+        else:
+            print(f"  [note] {len(want)} labels required upstream "
+                  "(`harness provider-setup`) — not verified without CLI auth")
+    if kind == "github":
+        print("  [note] github rejects self-approval on PRs: reviewers post "
+              "[harness:approved-by:*] / [harness:changes-requested] marker comments. "
+              "Native `gh pr review --approve` needs a separate reviewer identity.")
 
     # manifest drift
     mpath = repo / MANIFEST
@@ -457,7 +594,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                       if p.exists()]
     gw = repo / ".github/workflows"
     if gw.is_dir():
-        pipeline_files += list(gw.glob("*.yml"))
+        pipeline_files += list(gw.glob("*.yml")) + list(gw.glob("*.yaml"))
     pipeline_text = "\n".join(p.read_text() for p in pipeline_files)
     for s in suites:
         pth = repo / s.get("path", "")
@@ -512,6 +649,12 @@ def main() -> None:
 
     p = sub.add_parser("update", help="recompile with the current core")
     p.set_defaults(fn=cmd_update)
+
+    p = sub.add_parser("provider-setup",
+                       help="create the harness labels upstream (github/gitlab)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print the commands without touching the remote")
+    p.set_defaults(fn=cmd_provider_setup)
 
     p = sub.add_parser("doctor", help="config, auth, drift and contract checks")
     p.set_defaults(fn=cmd_doctor)
